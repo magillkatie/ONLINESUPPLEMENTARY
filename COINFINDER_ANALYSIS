@@ -1,0 +1,11 @@
+#!/bin/bash                                  
+#SBATCH --partition=k2-lowpri,k2-bioinf          # Queues to submit job to
+#SBATCH --mem=80G                                # Memory allocation
+#SBATCH --job-name=fasttree                      # Job name
+#SBATCH --output=TREE-%j.out                     # output log
+#SBATCH --error=TREE-%j.err                      # Error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk         # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL               # When to send emails
+
+fasttree -nt core_gene_alignment.aln \           # Build Max likelihood tree from  alignment
+    > core_gene_alignment.newick                 # Save output in Newick format
