@@ -1,0 +1,45 @@
+#!/bin/bash
+#SBATCH --job-name=eggNOG                       # Job name visible in SLURM queue
+#SBATCH --partition=k2-lowpri                   # Queue/partition to run on
+#SBATCH --time=7-23:59:59                       # Maximum runtime (7 days)
+#SBATCH --cpus-per-task=24                      # CPU threads per task (high; DIAMOND search is CPU-intensive)
+#SBATCH --mem=50G                               # Total memory
+#SBATCH --array=1-59%100                        # 59 array jobs, max 100 running simultaneously
+#SBATCH --output=EGG_in-%A-%a.out               # Standard output log per array task
+#SBATCH --error=EGG_in-%A-%a.err                # Error log per array task
+#SBATCH --mail-user=kmagill102@qub.ac.uk        # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL              # Email on job start, end, and failure
+
+module add diamond/0.9                          # Load DIAMOND module.
+
+# Define directories and parameters
+FAA_DIR="."                                     # Directory containing .faa protein FASTA files
+OUTDIR="EGGnog_results"                         # Output directory for eggNOG-mapper results
+THREADS=24                                      # Number of CPU threads passed to emapper.py
+BATCH_SIZE=100                                  # Number of genomes processed per array task
+
+mkdir -p "$OUTDIR"                              # Create output directory if it does not already exist
+
+# Load all .faa files into a sorted array
+mapfile -t FAA_FILES < <(ls "$FAA_DIR"/*.faa)
+
+# Determine which genomes this array task should process
+START=$(( (SLURM_ARRAY_TASK_ID - 1) * BATCH_SIZE ))
+END=$(( START + BATCH_SIZE ))
+
+# Loop through assigned genomes in this batch
+for (( i=START; i<END && i<${#FAA_FILES[@]}; i++ )); do
+    FAA="${FAA_FILES[$i]}"
+
+    echo "Annotating: $FAA"                     # Progress message for output log
+
+    emapper.py \
+        --data_dir /mnt/scratch2/igfs-anaconda/conda-envs/eggnog/lib/python3.9/site-packages/data \
+                                                # Path to eggNOG database directory
+        -i "$FAA" \                             # Input protein FASTA file
+        -o "$OUTDIR/$(basename "${FAA%.faa}")" \ # Output prefix named by genome ID
+        -m diamond \                            # Use DIAMOND
+        --cpu "$THREADS" \                      # Number of threads
+        --dbmem \                               # Load database into memory for faster searching
+        --dmnd_iterate no                       # Disable iterative DIAMOND search
+done
