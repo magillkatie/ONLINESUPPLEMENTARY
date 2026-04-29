@@ -1,0 +1,596 @@
+##SCRIPT 
+#!/usr/bin/env python3
+"""
+Generate ANI heatmaps with dendrograms from sourmash distance matrix.
+Creates both full and subset visualizations to identify outliers.
+"""
+
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.cluster.hierarchy import dendrogram, linkage
+from scipy.spatial.distance import squareform
+import plotly.figure_factory as ff
+import plotly.graph_objects as go
+import sys
+import argparse
+from pathlib import Path
+
+def jaccard_to_ani(jaccard):
+    """
+    Convert Jaccard similarity to ANI estimate using Mash formula.
+    
+    Parameters
+    ----------
+    jaccard : float or array
+        Jaccard similarity value(s) between 0 and 1
+    
+    Returns
+    -------
+    float or array
+        ANI estimate as percentage (0-100)
+    """
+    jaccard = np.asarray(jaccard)
+    ani = np.zeros_like(jaccard, dtype=float)
+    
+    # Handle special cases
+    ani[jaccard == 1.0] = 100.0
+    ani[jaccard == 0.0] = 0.0
+    
+    # Mash formula for other values
+    mask = (jaccard > 0.0) & (jaccard < 1.0)
+    ani[mask] = (1 - ((1 - jaccard[mask]) / (2 - jaccard[mask]))) * 100
+    
+    return ani
+
+def load_data(matrix_file, labels_file):
+    """Load distance matrix and labels."""
+    print(f"Loading matrix from {matrix_file}...")
+    matrix = np.load(matrix_file)
+    
+    print(f"Loading labels from {labels_file}...")
+    with open(labels_file, 'r') as f:
+        labels = [line.strip() for line in f]
+    
+    assert len(labels) == matrix.shape[0], \
+        f"Mismatch: {len(labels)} labels but {matrix.shape[0]} matrix rows"
+    
+    print(f"Loaded {len(labels)} genomes with {matrix.shape[0]}x{matrix.shape[1]} matrix")
+    return matrix, labels
+
+def create_static_heatmap(ani_matrix, labels, output_file, title, max_genomes=None):
+    """
+    Create static heatmap with dendrogram using matplotlib/seaborn.
+    
+    Parameters
+    ----------
+    ani_matrix : ndarray
+        ANI similarity matrix
+    labels : list
+        Genome labels
+    output_file : str
+        Output filename
+    title : str
+        Plot title
+    max_genomes : int, optional
+        Maximum number of genomes to plot (for subset view)
+    """
+    print(f"\nGenerating static heatmap: {output_file}")
+    
+    # Subset if requested
+    if max_genomes and len(labels) > max_genomes:
+        print(f"Subsetting to {max_genomes} genomes...")
+        indices = np.random.choice(len(labels), max_genomes, replace=False)
+        indices = np.sort(indices)
+        ani_matrix = ani_matrix[indices][:, indices]
+        labels = [labels[i] for i in indices]
+    
+    # Convert to distance for clustering
+    distance_matrix = 100 - ani_matrix
+    np.fill_diagonal(distance_matrix, 0)
+    
+    # Convert to condensed distance matrix for linkage
+    condensed_dist = squareform(distance_matrix, checks=False)
+    
+    # Perform hierarchical clustering (UPGMA = average linkage)
+    print("Performing hierarchical clustering (UPGMA)...")
+    linkage_matrix = linkage(condensed_dist, method='average')
+    
+    # Create figure with dendrogram
+    fig = plt.figure(figsize=(20, 18))
+    
+    # Add dendrogram
+    ax_dendro = fig.add_axes([0.05, 0.1, 0.15, 0.8])
+    dendro = dendrogram(linkage_matrix, orientation='left', no_labels=True,
+                        color_threshold=0, above_threshold_color='black')
+    ax_dendro.set_xticks([])
+    ax_dendro.set_yticks([])
+    ax_dendro.spines['top'].set_visible(False)
+    ax_dendro.spines['right'].set_visible(False)
+    ax_dendro.spines['bottom'].set_visible(False)
+    ax_dendro.spines['left'].set_visible(False)
+    
+    # Reorder matrix according to dendrogram
+    reorder_idx = dendro['leaves']
+    ani_matrix_reordered = ani_matrix[reorder_idx][:, reorder_idx]
+    labels_reordered = [labels[i] for i in reorder_idx]
+    
+    # Add heatmap
+    ax_heatmap = fig.add_axes([0.22, 0.1, 0.73, 0.8])
+    
+    # Create custom colormap (white to dark blue)
+    cmap = sns.color_palette("Blues", as_cmap=True)
+    
+    im = ax_heatmap.imshow(ani_matrix_reordered, aspect='auto', cmap=cmap,
+                           interpolation='nearest', vmin=0, vmax=100)
+    
+    # Add colorbar
+    cbar_ax = fig.add_axes([0.96, 0.1, 0.02, 0.8])
+    cbar = plt.colorbar(im, cax=cbar_ax)
+    cbar.set_label('ANI (%)', rotation=270, labelpad=20, fontsize=12)
+    
+    # Set title
+    ax_heatmap.set_title(title, fontsize=16, pad=20)
+    
+    # Remove ticks for large matrices
+    if len(labels) > 100:
+        ax_heatmap.set_xticks([])
+        ax_heatmap.set_yticks([])
+    else:
+        ax_heatmap.set_xticks(range(len(labels_reordered)))
+        ax_heatmap.set_yticks(range(len(labels_reordered)))
+        ax_heatmap.set_xticklabels(labels_reordered, rotation=90, fontsize=6)
+        ax_heatmap.set_yticklabels(labels_reordered, fontsize=6)
+    
+    plt.savefig(output_file, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {output_file}")
+
+def create_interactive_heatmap(ani_matrix, labels, output_file, title, max_genomes=None):
+    """
+    Create interactive heatmap with dendrogram using plotly.
+    
+    Parameters
+    ----------
+    ani_matrix : ndarray
+        ANI similarity matrix
+    labels : list
+        Genome labels
+    output_file : str
+        Output filename
+    title : str
+        Plot title
+    max_genomes : int, optional
+        Maximum number of genomes to plot (for subset view)
+    """
+    print(f"\nGenerating interactive heatmap: {output_file}")
+    
+    # Subset if requested
+    if max_genomes and len(labels) > max_genomes:
+        print(f"Subsetting to {max_genomes} genomes...")
+        indices = np.random.choice(len(labels), max_genomes, replace=False)
+        indices = np.sort(indices)
+        ani_matrix = ani_matrix[indices][:, indices]
+        labels = [labels[i] for i in indices]
+    
+    # Convert to distance for clustering
+    distance_matrix = 100 - ani_matrix
+    np.fill_diagonal(distance_matrix, 0)
+    
+    # Create figure with dendrogram
+    fig = ff.create_dendrogram(distance_matrix, labels=labels, 
+                                linkagefun=lambda x: linkage(x, method='average'),
+                                orientation='left')
+    
+    # Get the reordering from dendrogram
+    dendro_leaves = fig['layout']['yaxis']['ticktext']
+    dendro_idx = [labels.index(label) for label in dendro_leaves]
+    
+    # Reorder matrix
+    ani_matrix_reordered = ani_matrix[dendro_idx][:, dendro_idx]
+    
+    # Create heatmap
+    heatmap = go.Heatmap(
+        z=ani_matrix_reordered,
+        x=dendro_leaves,
+        y=dendro_leaves,
+        colorscale='Blues',
+        zmin=0,
+        zmax=100,
+        colorbar=dict(title='ANI (%)', titleside='right')
+    )
+    
+    # Add heatmap to figure
+    for trace in fig['data']:
+        trace['xaxis'] = 'x2'
+    
+    fig.add_trace(heatmap)
+    
+    # Update layout
+    fig.update_layout(
+        title=title,
+        xaxis=dict(domain=[0, 0.15], showticklabels=False),
+        xaxis2=dict(domain=[0.2, 1], showticklabels=True if len(labels) <= 100 else False),
+        yaxis=dict(showticklabels=True if len(labels) <= 100 else False),
+        width=1400,
+        height=1200,
+        showlegend=False
+    )
+    
+    fig.write_html(output_file)
+    print(f"Saved: {output_file}")
+
+def filter_by_ani_threshold(ani_matrix, labels, threshold):
+    """
+    Filter genomes based on ANI threshold.
+    Keep only genomes that have at least one connection above the threshold.
+    
+    Parameters
+    ----------
+    ani_matrix : ndarray
+        ANI similarity matrix
+    labels : list
+        Genome labels
+    threshold : float
+        Minimum ANI threshold (percentage)
+    
+    Returns
+    -------
+    filtered_matrix : ndarray
+        Filtered ANI matrix
+    filtered_labels : list
+        Filtered genome labels
+    removed_indices : list
+        Indices of removed genomes
+    """
+    print(f"\nFiltering genomes by ANI threshold: {threshold}%")
+    
+    # Find genomes with at least one connection above threshold
+    max_ani_per_genome = np.array([
+        np.max(ani_matrix[i, [j for j in range(len(labels)) if j != i]])
+        for i in range(len(labels))
+    ])
+    
+    keep_indices = np.where(max_ani_per_genome >= threshold)[0]
+    removed_indices = np.where(max_ani_per_genome < threshold)[0]
+    
+    print(f"  Genomes kept: {len(keep_indices)}")
+    print(f"  Genomes removed: {len(removed_indices)}")
+    
+    if len(removed_indices) > 0 and len(removed_indices) <= 50:
+        print(f"  Removed genomes:")
+        for idx in removed_indices:
+            print(f"    {labels[idx]}: max ANI = {max_ani_per_genome[idx]:.2f}%")
+    
+    # Filter matrix and labels
+    filtered_matrix = ani_matrix[keep_indices][:, keep_indices]
+    filtered_labels = [labels[i] for i in keep_indices]
+    
+    return filtered_matrix, filtered_labels, removed_indices
+
+def print_statistics(ani_matrix, labels, output_prefix=None):
+    """Print summary statistics about the ANI matrix and identify outliers."""
+    print("\n" + "="*60)
+    print("ANI MATRIX STATISTICS")
+    print("="*60)
+    
+    # Get upper triangle (excluding diagonal)
+    upper_tri = ani_matrix[np.triu_indices_from(ani_matrix, k=1)]
+    
+    print(f"Number of genomes: {len(labels)}")
+    print(f"Number of pairwise comparisons: {len(upper_tri):,}")
+    print(f"\nANI Distribution:")
+    print(f"  Minimum: {upper_tri.min():.2f}%")
+    print(f"  Maximum: {upper_tri.max():.2f}%")
+    print(f"  Mean: {upper_tri.mean():.2f}%")
+    print(f"  Median: {np.median(upper_tri):.2f}%")
+    print(f"  Std Dev: {upper_tri.std():.2f}%")
+    
+    # Identify outliers using multiple methods
+    print("\n" + "="*60)
+    print("OUTLIER DETECTION")
+    print("="*60)
+    
+    outliers_info = {}
+    
+    # Method 1: Low mean ANI (bottom 5%)
+    mean_ani_per_genome = np.mean(ani_matrix, axis=1)
+    mean_threshold = np.percentile(mean_ani_per_genome, 5)
+    outliers_mean = np.where(mean_ani_per_genome < mean_threshold)[0]
+    
+    print(f"\nMethod 1: Low mean ANI (bottom 5%)")
+    print(f"  Threshold: < {mean_threshold:.2f}%")
+    print(f"  Number identified: {len(outliers_mean)}")
+    
+    for idx in outliers_mean:
+        outliers_info[idx] = {
+            'label': labels[idx],
+            'mean_ani': mean_ani_per_genome[idx],
+            'max_ani': np.max(ani_matrix[idx, [i for i in range(len(labels)) if i != idx]]),
+            'methods': ['low_mean_ani']
+        }
+    
+    # Method 2: Low maximum ANI (isolated genomes)
+    max_ani_per_genome = np.array([
+        np.max(ani_matrix[i, [j for j in range(len(labels)) if j != i]])
+        for i in range(len(labels))
+    ])
+    max_threshold = np.percentile(max_ani_per_genome, 5)
+    outliers_max = np.where(max_ani_per_genome < max_threshold)[0]
+    
+    print(f"\nMethod 2: Low maximum ANI (isolated genomes)")
+    print(f"  Threshold: < {max_threshold:.2f}%")
+    print(f"  Number identified: {len(outliers_max)}")
+    
+    for idx in outliers_max:
+        if idx in outliers_info:
+            outliers_info[idx]['methods'].append('low_max_ani')
+        else:
+            outliers_info[idx] = {
+                'label': labels[idx],
+                'mean_ani': mean_ani_per_genome[idx],
+                'max_ani': max_ani_per_genome[idx],
+                'methods': ['low_max_ani']
+            }
+    
+    # Method 3: Statistical outliers (mean ANI < μ - 2σ)
+    global_mean = np.mean(mean_ani_per_genome)
+    global_std = np.std(mean_ani_per_genome)
+    statistical_threshold = global_mean - 2 * global_std
+    outliers_statistical = np.where(mean_ani_per_genome < statistical_threshold)[0]
+    
+    print(f"\nMethod 3: Statistical outliers (mean ANI < μ - 2σ)")
+    print(f"  Threshold: < {statistical_threshold:.2f}%")
+    print(f"  Number identified: {len(outliers_statistical)}")
+    
+    for idx in outliers_statistical:
+        if idx in outliers_info:
+            outliers_info[idx]['methods'].append('statistical_outlier')
+        else:
+            outliers_info[idx] = {
+                'label': labels[idx],
+                'mean_ani': mean_ani_per_genome[idx],
+                'max_ani': max_ani_per_genome[idx],
+                'methods': ['statistical_outlier']
+            }
+    
+    # Print summary of all outliers
+    print(f"\n" + "="*60)
+    print(f"SUMMARY: {len(outliers_info)} unique outliers identified")
+    print("="*60)
+    
+    if len(outliers_info) > 0:
+        # Sort by mean ANI (lowest first)
+        sorted_outliers = sorted(outliers_info.items(), 
+                                key=lambda x: x[1]['mean_ani'])
+        
+        print(f"\n{'Genome':<40} {'Mean ANI':<10} {'Max ANI':<10} {'Methods'}")
+        print("-" * 90)
+        
+        for idx, info in sorted_outliers[:20]:  # Show top 20
+            methods_str = ', '.join(info['methods'])
+            print(f"{info['label']:<40} {info['mean_ani']:>8.2f}% {info['max_ani']:>8.2f}% {methods_str}")
+        
+        if len(sorted_outliers) > 20:
+            print(f"... and {len(sorted_outliers) - 20} more")
+        
+        # Export to file if prefix provided
+        if output_prefix:
+            outliers_file = f"{output_prefix}_outliers.txt"
+            with open(outliers_file, 'w') as f:
+                f.write("# Outlier genomes identified by ANI analysis\n")
+                f.write("# Columns: genome_label, mean_ani, max_ani, num_methods, detection_methods\n")
+                f.write(f"# Total outliers: {len(outliers_info)}\n")
+                f.write(f"# Analysis date: {np.datetime64('today')}\n\n")
+                f.write(f"{'genome_label'}\t{'mean_ani'}\t{'max_ani'}\t{'num_methods'}\t{'detection_methods'}\n")
+                
+                for idx, info in sorted_outliers:
+                    methods_str = ';'.join(info['methods'])
+                    f.write(f"{info['label']}\t{info['mean_ani']:.2f}\t"
+                           f"{info['max_ani']:.2f}\t{len(info['methods'])}\t{methods_str}\n")
+            
+            print(f"\nOutliers exported to: {outliers_file}")
+    
+    print("="*60 + "\n")
+    
+    return outliers_info
+
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Generate ANI heatmaps with dendrograms from sourmash distance matrix',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Basic usage with default output names
+  python generate_ani_heatmap.py -m distances -l distances.labels.txt
+  
+  # Specify custom output prefix
+  python generate_ani_heatmap.py -m matrix.npy -l labels.txt -o my_analysis
+  
+  # Filter by ANI threshold (only genomes with at least one connection ≥80%)
+  python generate_ani_heatmap.py -m distances -l distances.labels.txt -t 80
+  
+  # Change subset size
+  python generate_ani_heatmap.py -m distances -l distances.labels.txt -s 1000
+  
+  # Skip subset generation
+  python generate_ani_heatmap.py -m distances -l distances.labels.txt --no-subset
+
+Outlier Detection Methods:
+  1. Low mean ANI: Genomes in bottom 5% by average ANI to all others
+  2. Low maximum ANI: Genomes in bottom 5% by best ANI match (isolated)
+  3. Statistical outliers: Genomes with mean ANI < μ - 2σ
+        """
+    )
+    
+    parser.add_argument('-m', '--matrix', required=True,
+                        help='Path to numpy distance/similarity matrix file (.npy)')
+    parser.add_argument('-l', '--labels', required=True,
+                        help='Path to labels file (one label per line)')
+    parser.add_argument('-o', '--output-prefix', default='ani_heatmap',
+                        help='Output file prefix (default: ani_heatmap)')
+    parser.add_argument('-t', '--ani-threshold', type=float, default=None,
+                        help='Filter genomes: keep only those with max ANI ≥ threshold (e.g., 80)')
+    parser.add_argument('-s', '--subset-size', type=int, default=500,
+                        help='Number of genomes for subset visualisation (default: 500)')
+    parser.add_argument('--no-subset', action='store_true',
+                        help='Skip subset heatmap generation')
+    parser.add_argument('--no-interactive', action='store_true',
+                        help='Skip interactive HTML heatmap generation')
+    parser.add_argument('--no-static', action='store_true',
+                        help='Skip static PNG heatmap generation')
+    parser.add_argument('--no-outliers', action='store_true',
+                        help='Skip outlier detection and export')
+    
+    args = parser.parse_args()
+    
+    # Validate input files exist
+    matrix_path = Path(args.matrix)
+    labels_path = Path(args.labels)
+    
+    if not matrix_path.exists():
+        print(f"Error: Matrix file not found: {args.matrix}", file=sys.stderr)
+        sys.exit(1)
+    
+    if not labels_path.exists():
+        print(f"Error: Labels file not found: {args.labels}", file=sys.stderr)
+        sys.exit(1)
+    
+    # Check that at least one output type is requested
+    if args.no_static and args.no_interactive:
+        print("Error: Cannot skip both static and interactive outputs", file=sys.stderr)
+        sys.exit(1)
+    
+    # Validate ANI threshold
+    if args.ani_threshold is not None:
+        if args.ani_threshold < 0 or args.ani_threshold > 100:
+            print("Error: ANI threshold must be between 0 and 100", file=sys.stderr)
+            sys.exit(1)
+    
+    # Load data
+    jaccard_matrix, labels = load_data(args.matrix, args.labels)
+    original_count = len(labels)
+    
+    # Convert to ANI
+    print("\nConverting Jaccard similarities to ANI estimates...")
+    ani_matrix = jaccard_to_ani(jaccard_matrix)
+    
+    # Apply ANI threshold filter if specified
+    removed_indices = []
+    if args.ani_threshold is not None:
+        ani_matrix, labels, removed_indices = filter_by_ani_threshold(
+            ani_matrix, labels, args.ani_threshold
+        )
+        
+        if len(labels) == 0:
+            print(f"\nError: All genomes removed by ANI threshold {args.ani_threshold}%", 
+                  file=sys.stderr)
+            print("Try a lower threshold value.", file=sys.stderr)
+            sys.exit(1)
+        
+        # Export removed genomes list
+        if len(removed_indices) > 0:
+            removed_file = f"{args.output_prefix}_removed_by_threshold.txt"
+            with open(removed_file, 'w') as f:
+                f.write(f"# Genomes removed by ANI threshold filter: {args.ani_threshold}%\n")
+                f.write(f"# Total removed: {len(removed_indices)}\n\n")
+                f.write("genome_label\tmax_ani\n")
+                
+                original_labels = []
+                with open(args.labels, 'r') as lf:
+                    original_labels = [line.strip() for line in lf]
+                
+                for idx in removed_indices:
+                    max_ani = np.max(jaccard_to_ani(jaccard_matrix[idx, 
+                                     [j for j in range(original_count) if j != idx]]))
+                    f.write(f"{original_labels[idx]}\t{max_ani:.2f}\n")
+            
+            print(f"  Removed genomes exported to: {removed_file}")
+    
+    # Print statistics and detect outliers
+    outliers_info = None
+    if not args.no_outliers:
+        outliers_info = print_statistics(ani_matrix, labels, args.output_prefix)
+    else:
+        # Still print basic statistics
+        upper_tri = ani_matrix[np.triu_indices_from(ani_matrix, k=1)]
+        print(f"\nDataset: {len(labels)} genomes")
+        print(f"ANI range: {upper_tri.min():.2f}% - {upper_tri.max():.2f}%")
+        print(f"Mean ANI: {upper_tri.mean():.2f}%\n")
+    
+    # Generate full heatmaps
+    print("\n" + "="*60)
+    print(f"GENERATING FULL HEATMAPS (all {len(labels)} genomes)")
+    if args.ani_threshold is not None:
+        print(f"(filtered by ANI threshold ≥ {args.ani_threshold}%)")
+    print("="*60)
+    
+    output_files = []
+    
+    if not args.no_static:
+        full_static = f'{args.output_prefix}_full.png'
+        title = f'ANI Heatmap - All {len(labels)} Genomes (UPGMA clustering)'
+        if args.ani_threshold is not None:
+            title += f'\nFiltered: ANI ≥ {args.ani_threshold}%'
+        create_static_heatmap(ani_matrix, labels, full_static, title)
+        output_files.append(full_static)
+    
+    if not args.no_interactive:
+        full_interactive = f'{args.output_prefix}_full_interactive.html'
+        title = f'ANI Heatmap - All {len(labels)} Genomes (UPGMA clustering)'
+        if args.ani_threshold is not None:
+            title += f' | Filtered: ANI ≥ {args.ani_threshold}%'
+        create_interactive_heatmap(ani_matrix, labels, full_interactive, title)
+        output_files.append(full_interactive)
+    
+    # Generate subset heatmaps
+    if not args.no_subset and len(labels) > args.subset_size:
+        print("\n" + "="*60)
+        print(f"GENERATING SUBSET HEATMAPS ({args.subset_size} random genomes)")
+        print("="*60)
+        
+        if not args.no_static:
+            subset_static = f'{args.output_prefix}_subset{args.subset_size}.png'
+            title = f'ANI Heatmap - Random Subset of {args.subset_size} Genomes (UPGMA clustering)'
+            if args.ani_threshold is not None:
+                title += f'\nFiltered: ANI ≥ {args.ani_threshold}%'
+            create_static_heatmap(ani_matrix, labels, subset_static, title,
+                                max_genomes=args.subset_size)
+            output_files.append(subset_static)
+        
+        if not args.no_interactive:
+            subset_interactive = f'{args.output_prefix}_subset{args.subset_size}_interactive.html'
+            title = f'ANI Heatmap - Random Subset of {args.subset_size} Genomes (UPGMA clustering)'
+            if args.ani_threshold is not None:
+                title += f' | Filtered: ANI ≥ {args.ani_threshold}%'
+            create_interactive_heatmap(ani_matrix, labels, subset_interactive, title,
+                                     max_genomes=args.subset_size)
+            output_files.append(subset_interactive)
+    elif not args.no_subset:
+        print(f"\nSkipping subset generation (dataset has only {len(labels)} genomes)")
+    
+    print("\n" + "="*60)
+    print("COMPLETE!")
+    print("="*60)
+    print(f"\nProcessed {len(labels)} genomes", end="")
+    if args.ani_threshold is not None:
+        print(f" ({original_count - len(labels)} removed by threshold)")
+    else:
+        print()
+    
+    print("\nGenerated files:")
+    for f in output_files:
+        print(f"  - {f}")
+    
+    # List additional output files
+    if not args.no_outliers and outliers_info:
+        print(f"  - {args.output_prefix}_outliers.txt")
+    if args.ani_threshold is not None and len(removed_indices) > 0:
+        print(f"  - {args.output_prefix}_removed_by_threshold.txt")
+    
+    if any(f.endswith('.html') for f in output_files):
+        print("\nOpen the HTML files in a browser for interactive exploration.")
+
+if __name__ == '__main__':
+    main()
