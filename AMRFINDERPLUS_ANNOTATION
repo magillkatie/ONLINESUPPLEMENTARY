@@ -1,0 +1,45 @@
+#!/bin/bash
+#SBATCH --time=7-23:59:59                    # Maximum runtime (7 days)
+#SBATCH --partition=k2-lowpri,k2-bioinf      # Queue/partition to run on (two queues for flexibility)
+#SBATCH --mail-user=kmagill102@qub.ac.uk     # Email notifications
+#SBATCH --mem=60G                            # Total memory for the job
+#SBATCH --cpus-per-task=4                    # CPU threads per task (lower than Bakta; AMRFinder is less intensive)
+#SBATCH --nodes=1                            # Run on a single node
+#SBATCH --mail-type=BEGIN,END,FAIL           # Email on job start, end, and failure
+#SBATCH --error=AMR_Pseudomonas-%A-%a.err    # Error log per array task (%A = job ID, %a = array index)
+#SBATCH --job-name=AMR_Pseudomonas           # Job name visible in SLURM queue
+#SBATCH --array=1-58%100                     # 58 array jobs, max 100 running simultaneously
+
+echo $SLURM_ARRAY_TASK_ID                    # Print current array task ID for logging
+
+# Define directories and parameters
+GENOME_DIR="."                               # Directory containing .fna, .faa, and .gff3 files
+OUTDIR="amrfinder_results"                   # Output directory for TSV results
+THREADS=4                                    # Number of CPU threads passed to AMRFinderPlus
+BATCH_SIZE=100                               # Number of genomes processed per array task
+
+mkdir -p "$OUTDIR"                           # Create output directory if it does not already exist
+
+# Load all .fna files into a sorted array
+mapfile -t GENOMES < <(ls "$GENOME_DIR"/*.fna)
+
+# Determine which genomes this array task should process
+START=$(( (SLURM_ARRAY_TASK_ID - 1) * BATCH_SIZE ))
+END=$(( START + BATCH_SIZE ))
+
+# Loop through assigned genomes in this batch
+for (( i=START; i<END && i<${#GENOMES[@]}; i++ )); do
+    GENOME="${GENOMES[$i]}"
+    BASENAME=$(basename "$GENOME" .fna)       # Strip path and .fna extension for clean naming
+    GFF="${GENOME_DIR}/${BASENAME}.gff3"      # Corresponding Bakta GFF3 annotation file
+    PROT="${GENOME_DIR}/${BASENAME}.faa"      # Corresponding Bakta protein FASTA file
+
+    amrfinder \
+        -p "$PROT" \                          # Protein sequence input
+        -n "$GENOME" \                        # Nucleotide sequence input
+        -g "$GFF" \                           # GFF3 annotation input (Bakta format)
+        -a bakta \                            # Specify annotation format as Bakta
+        -o "$OUTDIR/${BASENAME}_amrfinder.tsv" \  # Output TSV named by genome ID
+        --threads "$THREADS"                  # Number of threads
+
+done
