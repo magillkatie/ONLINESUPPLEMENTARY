@@ -1,0 +1,39 @@
+##SOURMASH SKETCH SCRIPT
+#!/bin/bash
+#SBATCH --time=23:59:59                 # 24-hour runtime
+#SBATCH --partition=k2-lowpri           # Low priority partition
+#SBATCH --nodes=1                       # Single node
+#SBATCH --mem=100G                      # Higher memory needed for large sketches
+#SBATCH --error=sourmash-%A-%a.err      # Error log
+#SBATCH --job-name=sourmash             # Job name
+#SBATCH --mail-type=BEGIN,END,FAIL      # Email notifications
+#SBATCH --mail-user=kmagill102@qub.ac.uk
+
+module load apps/anaconda3/2024.10       # Load Anaconda module
+source activate /mnt/scratch2/igfs-anaconda/conda-envs/sourmash_v4.9.4
+                                         # Activate sourmash environment
+
+# Create MinHash sketches for all genomes
+# *.fna = all genome FASTA files
+# --output = directory to store .sig.gz files
+sourmash sketch dna *.fna --output Pseudomonas_sourmash/
+
+##SOURMASH COMPARE SCRIPT
+#!/bin/bash
+#SBATCH --job-name=sourmash_compare      # Job name
+#SBATCH --partition=k2-lowpri,k2-bioinf  # Queues
+#SBATCH --time=2-23:59:00                # 3 day ma runtime
+#SBATCH --cpus-per-task=4                # Threads allocated
+#SBATCH --mem=40G                        # Memory allocated
+#SBATCH --output=sourmash_compare-%A.out # Output log
+#SBATCH --error=sourmash_compare-%A.err  # Error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk # Email Notifications
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --chdir=/mnt/scratch2/users/40355339/pseudomonasgenomes/Pseudomonas_sourmash
+                                          # Work inside correct directory (containing sketches)
+
+# Compute pairwise similarity matrix
+# *.sig.gz = all sketch files
+# -p 4 = use 4 threads
+# -o compare_output = base name for .npz file
+sourmash compare -p 4 *.sig.gz -o compare_output
