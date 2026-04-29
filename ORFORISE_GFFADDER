@@ -1,0 +1,32 @@
+#!/bin/bash
+#SBATCH --time=23:59:00                 #Allow job to run up to 24 hours
+#SBATCH --partition=k2-lowpri,k2-bioinf #Submit to queue
+#SBATCH --mem=25G                       #Memory allocation
+#SBATCH --job-name=ORF_MERGE            #Job name in slurm queue
+#SBATCH --output=ORF-%j.out             #output log (%j = job ID)
+#SBATCH --error=ORF-%j.err              #error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk #Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL      #Notify on job start, end, or failure
+
+PYTHONPATH=/users/40355339/.local/lib/python3.12/site-packages:$PYTHONPATH   #Ensure ORForise is discoverable
+
+mkdir -p GFF_MERGED                     #Create output directory for merged GFFs
+
+for f in *.fna; do                      #Loop through all genome FASTA files
+    id=$(basename "$f" .fna)            #Extract genome ID (remove .fna extension)
+
+    dna="${id}.fna"                     #Path to genome FASTA (required by ORForise)
+    ref="${id}.gff3"                    #Bakta structural annotation (reference GFF)
+    amr="${id}_amrfinder.gff"           #AMRFinderPlus annotation file
+    abr="${id}.fna.gff"                 #Abricate annotation file
+
+    python -m ORForise.GFF_Adder \      #Run ORForise GFF adder.
+        -dna "$dna" \                   #Provide genome FASTA for coordinate validation
+        -ref "$ref" \                   #Use Bakta GFF as the base annotation
+        -at amrfinder,abricate \        #Annotation types being added
+        -add "$amr","$abr" \            #GFF files to merge into the reference
+        --olap 90 \                     #Require 90% overlap to merge features
+        -o "GFF_MERGED/${id}_merged.gff" #Output merged GFF for this genome
+
+    echo "Finished $id"                 #Print progress message
+done                                    #End loop
