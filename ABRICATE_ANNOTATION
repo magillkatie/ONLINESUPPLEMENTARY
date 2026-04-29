@@ -1,0 +1,23 @@
+### SLURM script used:
+#!/bin/bash
+#SBATCH --job-name=abricate_vfdb   # JOB NAME FOR SLURM
+#SBATCH --partition=k2-lowpri,k2-bioinf  # QUEUE PARTIONS
+#SBATCH --time=2-23:59:00  # MAXIMUM RUNTIME
+#SBATCH --cpus-per-task=2  # CPUS REQUESTED
+#SBATCH --mem=40G  # MEMORY REQUESTED
+#SBATCH --output=abricate-%A.out  # OUTPUT LOG
+#SBATCH --error=abricate-%A.err  # ERROR LOG
+#SBATCH --mail-user=kmagill102@qub.ac.uk  # EMAIL NOTIFICATIONS
+#SBATCH --mail-type=BEGIN,END,FAIL
+#SBATCH --chdir=/mnt/scratch2/users/40355339/pseudomonasgenomes  # ENSURE JOB STARTS IN WORKING DIRECTORY
+
+GENOME_DIR="."                       # Directory containing original .fna files
+OUTDIR="abricate_vfdb_results"       # Output folder
+DB="vfdb"                            # Database to use (VFDB)
+mkdir -p "$OUTDIR"                   # Create output folder if missing
+
+for GENOME in "$GENOME_DIR"/*.fna; do    # Loop through all .fna files
+    OUTNAME=$(basename "$GENOME")        # Extract filename only
+    echo "Running Abricate on: $GENOME"  # Print progress
+    abricate --db "$DB" "$GENOME" > "$OUTDIR/${OUTNAME}.tsv"   # Run Abricate
+done                                     # End loop
