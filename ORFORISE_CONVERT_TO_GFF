@@ -1,0 +1,57 @@
+## SCRIPT A — ABRICATE TSV TO GFF3 CONVERSION
+
+#!/bin/bash
+#SBATCH --job-name=orforise_convert              # Job name visible in SLURM queue
+#SBATCH --partition=k2-lowpri,k2-bioinf          # Queue/partition (two queues for flexibility)
+#SBATCH --time=23:59:59                          # Maximum runtime (24 hours)
+#SBATCH --cpus-per-task=2                        # CPU threads (lightweight conversion task)
+#SBATCH --mem=40G                                # Memory allocation
+#SBATCH --output=ORF-%A-%a.out                   # Standard output log
+#SBATCH --error=ORF-%A-%a.err                    # Error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk         # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL               # Email on job start, end, and failure
+
+# Ensure ORForise is discoverable in user's local Python package directory
+export PYTHONPATH=/users/40355339/.local/lib/python3.12/site-packages:$PYTHONPATH
+
+mkdir -p result_gff                              # Create output directory if not already present
+
+# Loop through all Abricate TSV files in the working directory
+for f in *.fna.tsv; do
+    base=$(basename "$f" .fna.tsv)               # Strip .fna.tsv to get genome ID
+
+    python -m ORForise.Convert_To_GFF \
+        -dna ${base}.fna \                       # Nucleotide FASTA for coordinate validation
+        -i ${base}.fna.tsv \                     # Abricate TSV input file
+        -fmt abricate \                          # Specify input format as Abricate
+        -o result_gff                            # Output directory for converted GFF3 files
+done
+
+## SCRIPT B — AMRFINDER PLUS TSV TO GFF3 CONVERSION
+
+#!/bin/bash
+#SBATCH --job-name=orforise_convert              # Job name visible in SLURM queue
+#SBATCH --partition=k2-lowpri,k2-bioinf          # Queue/partition (two queues for flexibility)
+#SBATCH --time=23:59:59                          # Maximum runtime (24 hours)
+#SBATCH --cpus-per-task=2                        # CPU threads (lightweight conversion task)
+#SBATCH --mem=40G                                # Memory allocation
+#SBATCH --output=ORF-%A-%a.out                   # Standard output log
+#SBATCH --error=ORF-%A-%a.err                    # Error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk         # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL               # Email on job start, end, and failure
+
+# Ensure ORForise is discoverable in user's local Python package directory
+export PYTHONPATH=/users/40355339/.local/lib/python3.12/site-packages:$PYTHONPATH
+
+mkdir -p result_gff                              # Create output directory if not already present
+
+# Loop through all AMRFinderPlus TSV files in the working directory
+for f in *_amrfinder.tsv; do
+    base=$(basename "$f" _amrfinder.tsv)         # Strip _amrfinder.tsv to get genome ID
+
+    python -m ORForise.Convert_To_GFF \
+        -dna ${base}.fna \                       # Nucleotide FASTA for coordinate validation
+        -i ${base}_amrfinder.tsv \               # AMRFinderPlus TSV input file
+        -fmt amrfinder \                         # Specify input format as AMRFinderPlus
+        -o result_gff                            # Output directory for converted GFF3 files
+done
