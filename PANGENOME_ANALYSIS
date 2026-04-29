@@ -1,0 +1,28 @@
+#!/bin/bash                                      
+#SBATCH --time=3-23:59:00                        # Max runtime (3 days, 23h, 59m)
+#SBATCH --partition=k2-lowpri,k2-bioinf          # Queues
+#SBATCH --mem=150G                               # Total memory requested
+#SBATCH --cpus-per-task=20                       # Number of CPU
+#SBATCH --job-name=PAN                           # Job name
+#SBATCH --output=PY-%j.out                       # output log
+#SBATCH --error=PY-%j.err                        # Error log
+#SBATCH --mail-user=kmagill102@qub.ac.uk         # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL               # When to send emails
+
+mkdir -p pyamilyseq_output                       # Create output directory if missing
+
+PyamilySeq Full \                                # Run PyamilySeq in full mode
+  -output_dir ./pyamilyseq_output \              # Directory for all results
+  -input_type separate \                         # GFF and FASTA provided separately
+  -input_dir . \                                 # Use current directory as input
+  -name_split_gff .final.gff \                   # Identify GFF files by suffix
+  -name_split_fasta .fna \                       # Identify FASTA files by suffix
+  -sequence_type AA \                            # Use amino acid sequences
+  -gene_ident CDS \                              # Extract CDS features
+  -c 0.90 \                                      # Identity threshold for clustering
+  -s 0.80 \                                      # Length difference threshold
+  -write_groups 99,95 \                          # Write cluster groups at 99% & 95%
+  -write_individual_groups \                     # Output FASTA for each cluster
+  -align \                                       # Produce core gene alignment
+  -M 180000 \                                    # Max memory for CD-HIT (in MB)
+  -T 20                                          # Number of threads
