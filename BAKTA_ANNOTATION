@@ -1,0 +1,51 @@
+##SCRIPT
+#!/bin/bash
+#SBATCH --time=7-23:59:59                 # Maximum runtime (7 days)
+#SBATCH --partition=k2-lowpri             # Queue/partition to run on
+#SBATCH --mail-user=kmagill102@qub.ac.uk  # Email notifications
+#SBATCH --mem=60G                         # Total memory for the job
+#SBATCH --ntasks=16                       # Number of CPU threads
+#SBATCH --nodes=1                         # Run on a single node
+#SBATCH --mail-type=BEGIN,END,FAIL        # Email on start/end/fail
+#SBATCH --error=Bakta_Pseudomonas-%A-%a.err  # Error log per array task
+#SBATCH --job-name=Bakta_Pseudomonas      # Job name
+#SBATCH --array=1-61%100                  # 61 array jobs, max 100 running at one time
+#SBATCH --chdir=/mnt/scratch2/users/40355339/pseudomonasgenomes
+                                           # Working directory for job (ensure job starts in the same directory as inputs)
+
+echo $SLURM_ARRAY_TASK_ID                 # Print which array task is running
+
+# Activate Bakta conda environment
+source activate /mnt/scratch2/igfs-anaconda/conda-envs/bakta_1.11.0
+
+# Define directories and parameters
+GENOME_DIR="."                             # Directory containing .fna files
+OUTDIR="Pseudomonas_Bakta_results"         # Output directory for results
+DB="/mnt/scratch2/igfs-databases/Bakta/bakta_1.11.0_db_6.0/db"
+                                            # Path to Bakta database
+THREADS=16                                  # Number of CPU threads
+BATCH_SIZE=100                              # Number of genomes per array task
+
+mkdir -p "$OUTDIR"                          # Create output directory & skip if already exists
+
+# Load all .fna files into an array (sorted)
+mapfile -t GENOMES < <(ls "$GENOME_DIR"/*.fna)
+
+# Determine which genomes this array task should process
+START=$(( (SLURM_ARRAY_TASK_ID - 1) * BATCH_SIZE ))
+END=$(( START + BATCH_SIZE ))
+
+# Loop through assigned genomes
+for (( i=START; i<END && i<${#GENOMES[@]}; i++ )); do
+    GENOME="${GENOMES[$i]}"
+
+    echo "Annotating: $GENOME"             # Progress message
+
+    # Run Bakta annotation
+    bakta \
+        --db "$DB" \
+        --output "$OUTDIR" \
+        "$GENOME" \
+        --force \
+        --threads "$THREADS"
+done
