@@ -1,0 +1,23 @@
+#!/bin/bash
+#SBATCH --time=06-23:59:59          # Maximum runtime (6 days)
+#SBATCH --partition=k2-lowpri,k2-bioinf   # Selected partitions
+#SBATCH --job-name=WGET_run         # Job name for tracking
+#SBATCH --mem=10G                   # Memory allocation
+#SBATCH --mail-user=kmagill102@qub.ac.uk  # Email notifications
+#SBATCH --mail-type=BEGIN,END,FAIL  # Notify on start, end, fail
+
+
+# Loop through each genome ID in Genome_list.txt
+# $G represents each genome ID read from the file
+while read G; do
+
+   echo "Downloading $G..."          # Print progress to SLURM log
+
+   # wget command:
+   # -q = quiet mode (no output except errors)
+   # -O = output filename (<genome_id>.fna)
+   # API query retrieves genome sequence in FASTA format
+   wget -q -O "${G}.fna" \
+   "https://www.bv-brc.org/api/genome_sequence/?eq(genome_id,${G})&http_accept=text/x-fasta"
+
+done < Genome_list.txt              # Feed genome list into loop
